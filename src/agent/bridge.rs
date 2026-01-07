@@ -190,6 +190,22 @@ impl AgentSession {
                                             };
 
                                             if !accumulated_text.is_empty() {
+                                                // Get project name from metadata for prefix
+                                                let project_name_for_prefix = original_metadata
+                                                    .get("project_name")
+                                                    .map(|s| s.as_str())
+                                                    .unwrap_or("unknown");
+
+                                                // Strip leading newline if present
+                                                let trimmed_text =
+                                                    accumulated_text.trim_start_matches('\n');
+
+                                                // Add project name prefix to response with one newline
+                                                let prefixed_content = format!(
+                                                    "[{}]\n{}",
+                                                    project_name_for_prefix, trimmed_text
+                                                );
+
                                                 info!(
                                                     "Sending accumulated response: {} chars",
                                                     accumulated_text.len()
@@ -198,7 +214,7 @@ impl AgentSession {
                                                     id: Uuid::new_v4().to_string(),
                                                     chat_id: None,
                                                     sender: a_id.clone(),
-                                                    content: accumulated_text,
+                                                    content: prefixed_content,
                                                     timestamp: chrono::Utc::now(),
                                                     metadata: original_metadata.clone(),
                                                 };

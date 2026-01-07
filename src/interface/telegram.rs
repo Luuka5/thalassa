@@ -5,10 +5,18 @@ use crate::{
     manager::Manager,
     store::Store,
 };
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use teloxide::{prelude::*, utils::command::BotCommands};
 use tracing::{error, info};
 use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+struct ChatSession {
+    chat_id: i64,
+    active_project: String,
+    agent_id: EntityId,
+}
 
 #[derive(Clone)]
 pub struct TelegramInterface {
@@ -16,6 +24,7 @@ pub struct TelegramInterface {
     bus: Arc<EventBus>,
     manager: Arc<Manager>,
     store: Arc<Store>,
+    chat_sessions: Arc<Mutex<HashMap<i64, ChatSession>>>,
 }
 
 #[derive(BotCommands, Clone)]
@@ -30,8 +39,8 @@ enum Command {
     Help,
     #[command(description = "List available projects.")]
     Projects,
-    #[command(description = "Chat with Nereus Manager.")]
-    Nereus,
+    #[command(description = "Enter a project: /enter <project-name>")]
+    Enter(String),
 }
 
 impl TelegramInterface {
@@ -40,7 +49,30 @@ impl TelegramInterface {
             bus,
             manager,
             store,
+            chat_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    fn get_active_project(&self, chat_id: i64) -> Option<ChatSession> {
+        let sessions = self.chat_sessions.lock().unwrap();
+        sessions.get(&chat_id).cloned()
+    }
+
+    fn set_active_project(&self, chat_id: i64, project_name: String) {
+        let agent_id = EntityId::new(
+            format!("agent-{}", project_name),
+            format!("Agent ({})", project_name),
+            Role::Agent,
+        );
+
+        let session = ChatSession {
+            chat_id,
+            active_project: project_name,
+            agent_id,
+        };
+
+        let mut sessions = self.chat_sessions.lock().unwrap();
+        sessions.insert(chat_id, session);
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
@@ -160,6 +192,7 @@ impl TelegramInterface {
         });
 
         let whitelist_clone = whitelist.clone();
+        let whitelist_clone2 = whitelist.clone();
 
         let handler = Update::filter_message()
             .branch(dptree::entry().filter_command::<Command>().endpoint(
@@ -171,9 +204,17 @@ impl TelegramInterface {
                 answer_message(bot, msg, interface, whitelist_clone.clone())
             }));
 
-        let mut builder = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![interface])
-            .enable_ctrlc_handler();
+        let callback_handler =
+            Update::filter_callback_query().endpoint(move |bot, q, interface| {
+                handle_callback_query(bot, q, interface, whitelist_clone2.clone())
+            });
+
+        let mut builder = Dispatcher::builder(
+            bot,
+            dptree::entry().branch(handler).branch(callback_handler),
+        )
+        .dependencies(dptree::deps![interface])
+        .enable_ctrlc_handler();
 
         // In production/server environments, the default polling might have issues with
         // ipv6 or other networking quirks. Let's explicitly build the error handling.
@@ -222,50 +263,98 @@ async fn answer_command(
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .await?;
         }
-        Command::Projects => match interface.manager.list_projects().await {
-            Ok(projects) => {
-                if projects.is_empty() {
-                    bot.send_message(msg.chat.id, "No projects found.").await?;
-                } else {
-                    let list = projects.join("\n- ");
-                    bot.send_message(msg.chat.id, format!("Projects:\n- {}", list))
-                        .await?;
-                }
-            }
-            Err(e) => {
-                error!("Failed to list projects: {}", e);
-                bot.send_message(msg.chat.id, "Failed to retrieve project list.")
-                    .await?;
-            }
-        },
-        Command::Nereus => {
-            // 1. Ensure 'mothership-config' project exists/runs
-            // 2. Start agent session if not started
-            // 3. Set user context to talk to Nereus
+        Command::Projects => {
+            let current_project = interface.get_active_project(msg.chat.id.0);
 
-            bot.send_message(msg.chat.id, "Connecting to Nereus Manager...")
-                .await?;
+            match interface.manager.list_projects().await {
+                Ok(projects) => {
+                    if projects.is_empty() {
+                        bot.send_message(msg.chat.id, "No projects found.").await?;
+                    } else {
+                        let mut list = String::new();
+                        for project in &projects {
+                            if let Some(ref session) = current_project {
+                                if &session.active_project == project {
+                                    list.push_str(&format!("→ {}\n", project));
+                                    continue;
+                                }
+                            }
+                            list.push_str(&format!("  {}\n", project));
+                        }
 
-            let project_name = "mothership-config";
+                        let header = if current_project.is_some() {
+                            "Projects (→ = active):\n"
+                        } else {
+                            "Projects:\n"
+                        };
 
-            // Check if project exists, if not, we can't create it easily without config files.
-            // But the user said: "Make it to create a project... if it doesn't already exist."
-            // AND they provided the config. I have written the config files.
-
-            // Try to launch (this handles create/build/run logic in mothership runtime ideally)
-            match interface
-                .manager
-                .launch_project(project_name.to_string())
-                .await
-            {
-                Ok(_) => {
-                    bot.send_message(msg.chat.id, "Nereus Agent is active. You can now chat.")
-                        .await?;
+                        bot.send_message(msg.chat.id, format!("{}{}", header, list))
+                            .await?;
+                    }
                 }
                 Err(e) => {
-                    error!("Failed to launch Nereus: {}", e);
-                    bot.send_message(msg.chat.id, format!("Failed to launch Nereus: {}", e))
+                    error!("Failed to list projects: {}", e);
+                    bot.send_message(msg.chat.id, "Failed to retrieve project list.")
                         .await?;
+                }
+            }
+        }
+        Command::Enter(project_name) => {
+            let project_name = project_name.trim().to_string();
+
+            if project_name.is_empty() {
+                bot.send_message(
+                    msg.chat.id,
+                    "Usage: /enter <project-name>\n\nUse /projects to see available projects.",
+                )
+                .await?;
+                return Ok(());
+            }
+
+            // Check if project exists
+            match interface.manager.list_projects().await {
+                Ok(projects) => {
+                    if !projects.contains(&project_name) {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("Project '{}' not found.\n\nUse /projects to see available projects.", project_name)
+                        ).await?;
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to list projects: {}", e);
+                    bot.send_message(msg.chat.id, "Failed to retrieve project list.")
+                        .await?;
+                    return Ok(());
+                }
+            }
+
+            // Launch the project
+            bot.send_message(msg.chat.id, format!("Launching {}...", project_name))
+                .await?;
+
+            match interface.manager.launch_project(project_name.clone()).await {
+                Ok(_) => {
+                    // Set as active project for this chat
+                    interface.set_active_project(msg.chat.id.0, project_name.clone());
+
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "✓ Entered [{}]\n\nYou can now chat with this project.",
+                            project_name
+                        ),
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    error!("Failed to launch project: {}", e);
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("Failed to launch {}: {}", project_name, e),
+                    )
+                    .await?;
                 }
             }
         }
@@ -297,15 +386,56 @@ async fn answer_message(
             return Ok(());
         };
 
-        // If the user is just chatting, forward to Nereus (agent-mothership-config)
-        // ideally we should check if they are in a "session" with Nereus.
-        // For now, let's hardcode routing to 'mothership-config' agent.
+        // Check if chat has an active project
+        let session = interface.get_active_project(msg.chat.id.0);
 
-        let agent_id = EntityId::new("agent-mothership-config", "Nereus", Role::Agent);
+        if session.is_none() {
+            // No active project - show project picker with clickable buttons
+            match interface.manager.list_projects().await {
+                Ok(projects) => {
+                    if projects.is_empty() {
+                        bot.send_message(
+                            msg.chat.id,
+                            "No projects available. Please configure projects first.",
+                        )
+                        .await?;
+                    } else {
+                        // Create inline keyboard with project buttons
+                        use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+                        let buttons: Vec<Vec<InlineKeyboardButton>> = projects
+                            .iter()
+                            .map(|project| {
+                                vec![InlineKeyboardButton::callback(
+                                    project.clone(),
+                                    format!("enter:{}", project),
+                                )]
+                            })
+                            .collect();
+
+                        let keyboard = InlineKeyboardMarkup::new(buttons);
+
+                        bot.send_message(msg.chat.id, "Please select a project to enter:")
+                            .reply_markup(keyboard)
+                            .await?;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to list projects: {}", e);
+                    bot.send_message(msg.chat.id, "Failed to retrieve project list. Use /enter <project-name> to enter manually.")
+                        .await?;
+                }
+            }
+            return Ok(());
+        }
+
+        // Has active project - route message to agent
+        let session = session.unwrap();
         let user_entity_id = EntityId::new(user_id.to_string(), "TelegramUser", Role::User);
 
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("telegram_chat_id".to_string(), msg.chat.id.to_string());
+        metadata.insert("project_name".to_string(), session.active_project.clone());
 
         let chat_msg = ChatMessage {
             id: Uuid::new_v4().to_string(),
@@ -317,8 +447,99 @@ async fn answer_message(
         };
 
         interface.bus.publish(Event::ChatMessage(chat_msg));
-
-        // bot.send_message(msg.chat.id, "Sent to Nereus.").await?;
     }
+    Ok(())
+}
+
+async fn handle_callback_query(
+    bot: Bot,
+    q: teloxide::types::CallbackQuery,
+    interface: TelegramInterface,
+    whitelist: Vec<String>,
+) -> ResponseResult<()> {
+    // Check authorization
+    let user = &q.from;
+    if !whitelist.contains(&user.username.clone().unwrap_or_default()) {
+        bot.answer_callback_query(&q.id)
+            .text("You are not authorized to use this bot.")
+            .await?;
+        return Ok(());
+    }
+
+    // Parse callback data
+    if let Some(data) = &q.data {
+        if let Some(project_name) = data.strip_prefix("enter:") {
+            let project_name = project_name.to_string();
+
+            // Get chat_id from the message
+            let chat_id = if let Some(ref msg) = q.message {
+                msg.chat.id
+            } else {
+                bot.answer_callback_query(&q.id)
+                    .text("Error: Could not determine chat")
+                    .await?;
+                return Ok(());
+            };
+
+            // Verify project exists
+            match interface.manager.list_projects().await {
+                Ok(projects) => {
+                    if !projects.contains(&project_name) {
+                        bot.answer_callback_query(&q.id)
+                            .text(format!("Project '{}' not found", project_name))
+                            .show_alert(true)
+                            .await?;
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to list projects: {}", e);
+                    bot.answer_callback_query(&q.id)
+                        .text("Failed to retrieve project list")
+                        .show_alert(true)
+                        .await?;
+                    return Ok(());
+                }
+            }
+
+            // Launch the project
+            match interface.manager.launch_project(project_name.clone()).await {
+                Ok(_) => {
+                    // Set as active project for this chat
+                    interface.set_active_project(chat_id.0, project_name.clone());
+
+                    // Answer the callback query
+                    bot.answer_callback_query(&q.id)
+                        .text(format!("Entered {}", project_name))
+                        .await?;
+
+                    // Edit the original message to show success
+                    if let Some(msg) = q.message {
+                        bot.edit_message_text(
+                            msg.chat.id,
+                            msg.id,
+                            format!(
+                                "✓ Entered [{}]\n\nYou can now chat with this project.",
+                                project_name
+                            ),
+                        )
+                        .await?;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to launch project: {}", e);
+                    bot.answer_callback_query(&q.id)
+                        .text(format!("Failed to launch {}: {}", project_name, e))
+                        .show_alert(true)
+                        .await?;
+                }
+            }
+        } else {
+            bot.answer_callback_query(&q.id)
+                .text("Unknown action")
+                .await?;
+        }
+    }
+
     Ok(())
 }
