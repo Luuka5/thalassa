@@ -1,7 +1,10 @@
+use crate::{
+    chat::ChatMessage,
+    entity::{EntityId, Role},
+};
 use anyhow::{Context, Result};
 use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Row, SqlitePool};
-use std::{str::FromStr, path::Path, collections::HashMap};
-use crate::{chat::ChatMessage, entity::{EntityId, Role}};
+use std::{collections::HashMap, path::Path, str::FromStr};
 
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -13,22 +16,22 @@ impl Store {
     /// This will automatically create the database file if it doesn't exist.
     pub async fn new(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
-        
+
         // Ensure the parent directory exists
         if let Some(parent) = db_path.parent() {
             if !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .context("Failed to create database directory")?;
+                std::fs::create_dir_all(parent).context("Failed to create database directory")?;
             }
         }
 
         let db_url = format!("sqlite://{}", db_path.to_string_lossy());
-        
+
         let options = SqliteConnectOptions::from_str(&db_url)?
             .create_if_missing(true)
             .log_statements(tracing::log::LevelFilter::Trace);
 
-        let pool = SqlitePool::connect_with(options).await
+        let pool = SqlitePool::connect_with(options)
+            .await
             .context("Failed to connect to SQLite database")?;
 
         Ok(Self { pool })
@@ -68,7 +71,7 @@ impl Store {
             r#"
             INSERT INTO messages (id, chat_id, sender, content, timestamp)
             VALUES (?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(&msg.id)
         .bind(&msg.chat_id)
@@ -92,7 +95,7 @@ impl Store {
             WHERE chat_id = ?
             ORDER BY timestamp DESC
             LIMIT ?
-            "#
+            "#,
         )
         .bind(chat_id)
         .bind(limit)
@@ -107,21 +110,21 @@ impl Store {
             // We need to deserialize the sender string back into an EntityId
             // But wait, EntityId::new takes (id, name, role).
             // We only stored a string representation.
-            // Ideally we should store JSON or normalized fields. 
+            // Ideally we should store JSON or normalized fields.
             // For now, let's assume the string format is "Name (ID)" and parse it, or just use a default role.
             // Actually, `sender.to_string()` output format is `Name (ID)`.
-            // Let's just create a generic "Historical" entity if we can't parse perfectly, 
+            // Let's just create a generic "Historical" entity if we can't parse perfectly,
             // or better yet, fix `save_message` to store structured data if we want structured read.
             // For this iteration, let's treat it as a generic User/Agent based on content or just Unknown role.
-            
+
             let sender = if sender_str.starts_with("Agent") {
-                 EntityId::new(sender_str.clone(), sender_str, Role::Agent)
+                EntityId::new(sender_str.clone(), sender_str, Role::Agent)
             } else if sender_str == "System (system)" {
-                 EntityId::system()
+                EntityId::system()
             } else {
-                 EntityId::new(sender_str.clone(), sender_str, Role::User)
+                EntityId::new(sender_str.clone(), sender_str, Role::User)
             };
-            
+
             messages.push(ChatMessage {
                 id: row.try_get("id")?,
                 chat_id: row.try_get("chat_id")?,
@@ -147,7 +150,7 @@ impl Store {
             ON CONFLICT(id) DO UPDATE SET
                 username = excluded.username,
                 first_name = excluded.first_name
-            "#
+            "#,
         )
         .bind(user.id)
         .bind(&user.username)

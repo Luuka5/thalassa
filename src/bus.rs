@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 pub enum Event {
     /// A new chat message was sent
     ChatMessage(ChatMessage),
-    
+
     /// A system notification (e.g., container started, build failed)
     SystemNotification {
         level: NotificationLevel,
@@ -17,11 +17,8 @@ pub enum Event {
     },
 
     /// A scheduled job triggered
-    ScheduledEvent {
-        job_id: String,
-        payload: String,
-    },
-    
+    ScheduledEvent { job_id: String, payload: String },
+
     /// Configuration changed
     ConfigChanged,
 }

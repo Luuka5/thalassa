@@ -1,14 +1,14 @@
-use tracing::{info, error};
 use std::sync::Arc;
+use tracing::{error, info};
 
 mod agent; // Added agent module
 mod bus;
 mod chat;
 mod entity;
+mod interface;
 mod manager;
-mod store;
 mod mcp;
-mod interface; // Added interface module
+mod store; // Added interface module
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,8 +21,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize logging with default filter if RUST_LOG is not set
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -37,14 +36,14 @@ async fn main() -> anyhow::Result<()> {
     let db_path = std::path::Path::new(&home_dir)
         .join(".mothership")
         .join("thalassa.db");
-    
+
     info!("Initializing store at {}", db_path.display());
     let store = store::Store::new(&db_path).await?;
     store.init().await?;
 
     // Initialize the Manager
     let manager = Arc::new(manager::Manager::new(bus.clone())?);
-    
+
     // Spawn the scheduler in the background
     let manager_clone = manager.clone();
     let scheduler_handle = tokio::spawn(async move {
@@ -58,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
 
     let port = 3000;
     info!("Starting MCP server on port {}", port);
-    
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
 
     // Initialize Telegram Interface if token is present
@@ -84,9 +83,9 @@ async fn main() -> anyhow::Result<()> {
                 error!("Telegram bot stopped with error: {}", e);
             }
         } else {
-             // Keep the task alive but doing nothing if disabled, or just exit.
-             // Exiting is fine.
-             std::future::pending::<()>().await;
+            // Keep the task alive but doing nothing if disabled, or just exit.
+            // Exiting is fine.
+            std::future::pending::<()>().await;
         }
     });
 

@@ -1,0 +1,6 @@
+[project]
+name = "mothership-config"
+ship = "mothership"
+
+# This is the Thalassa control project - it manages the mothership configs itself
+# No repos needed as it just operates on ~/.mothership/config

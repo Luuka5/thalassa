@@ -2,8 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    extract::{State, Json},
-    response::{sse::{Event, Sse}, IntoResponse},
+    extract::{Json, State},
+    response::{
+        sse::{Event, Sse},
+        IntoResponse,
+    },
     routing::{get, post},
     Router,
 };
@@ -12,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::manager::Manager;
 
@@ -31,7 +34,11 @@ pub enum JsonRpcRequest {
     CallTool { params: CallToolParams, id: Value },
     // Catch-all for other methods we don't support yet, or notifications
     #[serde(untagged)]
-    Unknown { method: String, params: Option<Value>, id: Option<Value> },
+    Unknown {
+        method: String,
+        params: Option<Value>,
+        id: Option<Value>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,7 +131,7 @@ async fn sse_handler(
     State(state): State<Arc<McpState>>,
 ) -> Sse<impl Stream<Item = Result<Event, axum::BoxError>>> {
     info!("New SSE connection established");
-    
+
     // Create a new receiver for this connection
     let mut rx = state.tx.subscribe();
 
@@ -164,7 +171,7 @@ async fn messages_handler(
     match request {
         JsonRpcRequest::Initialize { params, id } => {
             info!("Initializing MCP session: client={:?}", params.clientInfo);
-            
+
             let result = serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
@@ -211,13 +218,13 @@ async fn messages_handler(
                         },
                         "required": ["project", "command"]
                     }
-                })
+                }),
             ];
 
             let result = serde_json::json!({
                 "tools": tools
             });
-            
+
             Json(JsonRpcResponse::success(id, result))
         }
 
@@ -239,23 +246,23 @@ async fn messages_handler(
                     }
                 }
                 "launch_project" => {
-                    let name = params.arguments.as_ref()
+                    let name = params
+                        .arguments
+                        .as_ref()
                         .and_then(|args| args.get("name"))
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| "Missing 'name' argument".to_string());
 
                     match name {
-                        Ok(n) => {
-                            match state.manager.launch_project(n.to_string()).await {
-                                Ok(_) => Ok(serde_json::json!({
-                                    "content": [{
-                                        "type": "text",
-                                        "text": format!("Launched project: {}", n)
-                                    }]
-                                })),
-                                Err(e) => Err(e.to_string())
-                            }
-                        }
+                        Ok(n) => match state.manager.launch_project(n.to_string()).await {
+                            Ok(_) => Ok(serde_json::json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": format!("Launched project: {}", n)
+                                }]
+                            })),
+                            Err(e) => Err(e.to_string()),
+                        },
                         Err(e) => Err(e),
                     }
                 }
@@ -266,20 +273,24 @@ async fn messages_handler(
 
                     match (project, command) {
                         (Some(p), Some(c)) => {
-                            match state.manager.exec_command(p.to_string(), c.to_string()).await {
+                            match state
+                                .manager
+                                .exec_command(p.to_string(), c.to_string())
+                                .await
+                            {
                                 Ok(output) => Ok(serde_json::json!({
                                     "content": [{
                                         "type": "text",
                                         "text": output
                                     }]
                                 })),
-                                Err(e) => Err(e.to_string())
+                                Err(e) => Err(e.to_string()),
                             }
                         }
-                        _ => Err("Missing 'project' or 'command' argument".to_string())
+                        _ => Err("Missing 'project' or 'command' argument".to_string()),
                     }
                 }
-                unknown => Err(format!("Unknown tool: {}", unknown))
+                unknown => Err(format!("Unknown tool: {}", unknown)),
             };
 
             match result {
@@ -291,10 +302,18 @@ async fn messages_handler(
         JsonRpcRequest::Unknown { method, id, .. } => {
             error!("Unknown method: {}", method);
             if let Some(req_id) = id {
-                Json(JsonRpcResponse::error(req_id, -32601, format!("Method not found: {}", method)))
+                Json(JsonRpcResponse::error(
+                    req_id,
+                    -32601,
+                    format!("Method not found: {}", method),
+                ))
             } else {
                 // Notification, no response needed (or we can't respond without ID)
-                 Json(JsonRpcResponse::error(Value::Null, -32600, "Invalid Request".to_string()))
+                Json(JsonRpcResponse::error(
+                    Value::Null,
+                    -32600,
+                    "Invalid Request".to_string(),
+                ))
             }
         }
     }

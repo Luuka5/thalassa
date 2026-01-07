@@ -26,50 +26,53 @@
 
 ## 2. Detailed Implementation Plan
 
-### Phase 1: Mothership Core Enhancements
-Before Thalassa can fully function, the core `mothership` library needs specific updates.
+### Phase 1: Mothership Core Enhancements (Complete)
 *   **Goal:** Enable command execution within containers.
-*   **Tasks:**
-    1.  **Implement `exec`:** Add functionality to `mothership::Runtime` to execute non-interactive commands inside running containers.
-    2.  **API Exposure:** Ensure the `exec` method returns `Result<Output, Error>` (capturing stdout/stderr).
-    3.  **Verification:** Add unit tests in `mothership` to verify `exec` works on a dummy container.
+*   **Status:** 
+    *   [x] Implemented `exec_capture` in `mothership::Runtime`.
+    *   [x] Implemented `spawn_exec` for persistent process spawning (ACP support).
 
-### Phase 2: Thalassa Foundation
-Setting up the internal plumbing of the daemon.
+### Phase 2: Thalassa Foundation (Complete)
 *   **Stack:** Rust, Tokio, SQLx (SQLite).
-*   **Tasks:**
-    1.  **Project Setup:** Initialize `thalassa` crate (if not exists) with `tokio` (full features).
-    2.  **Event Bus:** Implement a typed `EventBus` using `tokio::sync::broadcast`.
-        *   Enum: `ThalassaEvent` (`Message(Message)`, `System(SystemEvent)`).
-    3.  **Entity System:** Define `Entity` trait and `EntityManager` to resolve IDs to names/types.
-    4.  **Persistence:**
-        *   Setup `sqlx` with SQLite.
-        *   Schema: `chats`, `messages`, `entities`.
-        *   Implement `ChatRepository` for history retrieval and storage.
+*   **Status:**
+    *   [x] Project Setup (`thalassa` crate).
+    *   [x] Event Bus (`src/bus.rs`).
+    *   [x] Entity System (`src/entity.rs`).
+    *   [x] Persistence (`src/store.rs`).
 
-### Phase 3: The Manager
-The brain that wraps the Mothership library.
-*   **Tasks:**
-    1.  **Runtime Wrapper:** Create a `Manager` struct that holds the `mothership::Runtime` instance.
-    2.  **State Management:** Track the state of environments (Up/Down) in memory, syncing with the actual Docker state via `mothership`.
-    3.  **Scheduler:** Implement a simple loop or `tokio-cron-scheduler` for periodic tasks (e.g., checking container health, pruning logs).
+### Phase 3: The Manager (Complete)
+*   **Status:**
+    *   [x] Runtime Wrapper (`src/manager.rs`).
+    *   [x] State Management.
+    *   [ ] Scheduler Logic (Placeholder exists in `src/manager.rs`, need implementation).
 
-### Phase 4: Interfaces
-Connecting the daemon to the outside world.
-*   **MCP Server (Machine Interface):**
-    *   **Lib:** `axum` for HTTP/SSE.
-    *   **Transport:** Implement SSE transport for MCP.
-    *   **Endpoints:** `/sse` (connection), `/messages` (POST for JSON-RPC).
-    *   **Tools:** Expose `mothership` capabilities as MCP Tools (`list_containers`, `up`, `down`, `exec`).
-*   **Telegram Bot (Human Interface):**
-    *   **Lib:** `teloxide`.
-    *   **Handler:** Listen for text messages, wrap them in `ThalassaEvent`, and push to the Event Bus.
-    *   **Response:** Listen to Event Bus for replies targeting the Telegram user.
+### Phase 4: Interfaces (Complete)
+*   **Status:**
+    *   [x] MCP Server (`src/mcp/server.rs`).
+    *   [x] Telegram Bot (`src/interface/telegram.rs`).
+    *   [x] Agent Bridge using ACP Protocol (`src/agent/bridge.rs`, `src/agent/client.rs`, `src/agent/acp.rs`).
 
-### Phase 5: Integration & Loop
+### Phase 5: Integration & Loop (In Progress)
+*   **Status:**
+    *   [x] Wiring (`src/main.rs`).
+    *   [ ] Full End-to-End Verification.
+
+### Phase 6: Refinement & Robustness (In Progress)
+Address architectural fragility identified in the initial implementation.
 *   **Tasks:**
-    1.  **Wiring:** Instantiate `EventBus`, `Manager`, `Database`, `HttpServer`, and `Bot` in `main.rs`.
-    2.  **Flow:**
-        *   User sends Telegram message -> Bot -> EventBus.
-        *   Agent/System processes Event -> Calls `Manager` (e.g., `exec "ls"`) -> EventBus.
-        *   Bot/MCP picks up result -> Sends back to User.
+    1.  **Agent Bridge Persistence:** [x] COMPLETE
+        *   Implemented ACP (Agent Client Protocol) client in `src/agent/client.rs`.
+        *   Replaced stateless `opencode run` with persistent `opencode acp` connection.
+        *   Session persistence now handled by ACP protocol.
+    2.  **Telegram Reliability:** [x] COMPLETE (metadata-based routing implemented)
+        *   Telegram chat ID is passed through metadata in `ChatMessage`.
+        *   Agent replies preserve the metadata for proper routing back to Telegram users.
+    3.  **Scheduler Implementation:** [ ] TODO
+        *   Flesh out the `Scheduler` in `src/manager.rs` to handle periodic tasks (e.g., health checks).
+    4.  **Logging & Error Handling:** [x] COMPLETE
+        *   All critical paths use `tracing` for logging.
+        *   Errors are logged via `tracing::error!`.
+    5.  **Response Extraction:** [x] COMPLETE
+        *   Implemented `extract_text_from_response()` helper in `bridge.rs`.
+        *   Tries multiple JSON paths to extract agent responses.
+        *   Falls back to debug logging if structure is unexpected.
