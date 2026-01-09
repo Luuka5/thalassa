@@ -1400,6 +1400,7 @@ dependencies = [
 [[package]]
 name = "mothership"
 version = "0.1.0"
+source = "git+https://github.com/Luuka5/mothership.git#4774cd533ec0c76c6627829d803a278481f7d340"
 dependencies = [
  "anyhow",
  "clap",
