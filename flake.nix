@@ -29,6 +29,12 @@
 
           cargoLock = {
             lockFile = ./Cargo.lock;
+
+            # Git dependencies require fixed output hashes for vendoring.
+            # Fill this with the hash Nix prints when the build fails.
+            outputHashes = {
+              "mothership-0.1.0" = "sha256-HS8mJGWkMDo61tAZjndAaa1CYtKafUPZlczHNDPg9VU=";
+            };
           };
 
           nativeBuildInputs = with pkgs; [
