@@ -51,8 +51,11 @@
           # and remove cargoHash. (Not reproducible.)
 
           buildInputs = with pkgs; [
-            # Add link-time deps here if needed
+            openssl
           ];
+
+          # Ensure we link against Nix-provided OpenSSL.
+          OPENSSL_NO_VENDOR = 1;
 
           # Keep runtime tools reachable if the binary shells out.
           postInstall = ''
